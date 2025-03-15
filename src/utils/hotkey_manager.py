@@ -29,6 +29,7 @@ class HotkeyManager:
         self._pending_fullscreen = False
         self._pending_area = False
         self._pending_esc = False
+        self._pending_auto_save = False  # 添加自动保存标志
         
         logger.debug("初始化热键管理器")
     
@@ -81,8 +82,23 @@ class HotkeyManager:
                 self._pending_esc = True
                 # 不再直接发射信号，只设置标志
             
+            # 添加F11自动保存截图热键
+            def emit_auto_save_signal():
+                logger.info("键盘库捕获到 F11 快捷键，设置待处理标志")
+                # 检查是否在短时间内重复触发
+                current_time = datetime.datetime.now()
+                last_time = self.last_hotkey_time.get('auto_save')
+                if last_time and (current_time - last_time).total_seconds() < 1.0:
+                    logger.debug("忽略重复触发的自动保存截图快捷键")
+                    return
+                
+                self.last_hotkey_time['auto_save'] = current_time
+                self._pending_auto_save = True
+                # 不再直接发射信号，只设置标志
+            
             keyboard.add_hotkey('ctrl+f12', emit_area_signal)
             keyboard.add_hotkey('esc', emit_esc_signal)
+            keyboard.add_hotkey('f11', emit_auto_save_signal)  # 注册F11热键
             
             logger.info("成功注册系统级全局热键")
         except Exception as e:
@@ -149,6 +165,12 @@ class HotkeyManager:
                 self._pending_esc = False
                 # 使用信号而不是直接调用
                 self.parent.esc_signal.emit()
+                
+            if self._pending_auto_save:
+                logger.debug("检测到待处理的自动保存截图信号")
+                self._pending_auto_save = False
+                # 使用信号而不是直接调用
+                self.parent.auto_save_signal.emit()
         except Exception as e:
             logger.error(f"检查热键状态时出错: {str(e)}")
             logger.error(traceback.format_exc()) 

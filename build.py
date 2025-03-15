@@ -12,9 +12,13 @@ from datetime import datetime
 
 # 应用程序配置
 APP_NAME = "ScreenshotTool"
-APP_VERSION = "1.0.0"
-MAIN_SCRIPT = "src/main.py"
+APP_VERSION = "1.0.1"  # 更新版本号，反映修复了keyboard模块清理的问题
+MAIN_SCRIPT = "run.py"  # 使用正确的入口点脚本
 OUTPUT_DIR = "dist"
+
+# 最近的更新:
+# 1.0.1 - 修复了程序退出时keyboard模块的清理错误
+# 1.0.0 - 初始版本
 
 def clean_build_directories():
     """
@@ -102,8 +106,8 @@ VSVersionInfo(
   ffi=FixedFileInfo(
     # filevers and prodvers should be always a tuple with four items: (1, 2, 3, 4)
     # Set not needed items to zero 0.
-    filevers=(1, 0, 0, 0),
-    prodvers=(1, 0, 0, 0),
+    filevers=(1, 0, 1, 0),
+    prodvers=(1, 0, 1, 0),
     # Contains a bitmask that specifies the valid bits 'flags'r
     mask=0x3f,
     # Contains a bitmask that specifies the Boolean attributes of the file.
@@ -127,12 +131,12 @@ VSVersionInfo(
         u'080404b0',
         [StringStruct(u'CompanyName', u''),
         StringStruct(u'FileDescription', u'屏幕截图工具'),
-        StringStruct(u'FileVersion', u'1.0.0'),
+        StringStruct(u'FileVersion', u'1.0.1'),
         StringStruct(u'InternalName', u'ScreenshotTool'),
         StringStruct(u'LegalCopyright', u'Copyright (C) {datetime.now().year}'),
         StringStruct(u'OriginalFilename', u'ScreenshotTool.exe'),
         StringStruct(u'ProductName', u'屏幕截图工具'),
-        StringStruct(u'ProductVersion', u'1.0.0')])
+        StringStruct(u'ProductVersion', u'1.0.1')])
       ]), 
     VarFileInfo([VarStruct(u'Translation', [2052, 1200])])
   ]
@@ -195,6 +199,10 @@ def build_executable():
         '--hidden-import=PyQt5.QtCore',
         '--hidden-import=PyQt5.QtGui',
         '--hidden-import=ctypes',
+        '--hidden-import=datetime',
+        '--hidden-import=shutil',
+        '--hidden-import=atexit',
+        '--hidden-import=signal',
     ]
     params.extend(hidden_imports)
     

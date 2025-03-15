@@ -36,12 +36,22 @@ def cleanup():
         # 尝试清理keyboard模块
         try:
             import keyboard
+            # 先解除所有热键
             keyboard.unhook_all()
+            
+            # 安全地停止监听器
             if hasattr(keyboard, '_listener') and keyboard._listener:
                 try:
-                    keyboard._listener.stop()
-                except:
-                    pass
+                    # 直接调用stop方法，避免使用可能不存在的start_if_necessary
+                    if hasattr(keyboard._listener, 'stop'):
+                        keyboard._listener.stop()
+                except Exception as inner_e:
+                    logger.debug(f"停止keyboard监听器时出错: {str(inner_e)}")
+            
+            # 清理其他可能的资源
+            if hasattr(keyboard, '_hotkeys'):
+                keyboard._hotkeys.clear()
+                
             logger.info("已清理keyboard模块")
         except Exception as e:
             logger.error(f"清理keyboard模块时出错: {str(e)}")

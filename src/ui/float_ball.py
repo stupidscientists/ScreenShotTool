@@ -6,8 +6,8 @@
 import traceback
 import time
 import ctypes
-from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QMenu, QAction
-from PyQt5.QtCore import Qt, QPoint, QTimer
+from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QMenu, QAction, QApplication
+from PyQt5.QtCore import Qt, QPoint, QTimer, QSize, QMetaObject, Q_ARG
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QCursor
 from src.utils.logger import logger
 
@@ -94,6 +94,9 @@ class FloatBall(QWidget):
                 pixmap
             )
             painter.end()
+            
+            # 保存原始图标作为实例变量，以便在恢复样式时使用
+            self.default_icon = QPixmap(rounded_pixmap)
             
             self.icon_label.setPixmap(rounded_pixmap)
             layout.addWidget(self.icon_label)
@@ -273,7 +276,12 @@ class FloatBall(QWidget):
                 lambda: self.parent_window.start_capture()
             )
             
-            exit_action = QAction("退出工作模式", self)
+            auto_save_action = QAction("自动保存截图 (F11)", self)
+            auto_save_action.triggered.connect(
+                lambda: self.parent_window.take_auto_save_screenshot()
+            )
+            
+            exit_action = QAction("显示界面", self)
             exit_action.triggered.connect(
                 lambda: self.parent_window.exit_working_mode()
             )
@@ -281,6 +289,7 @@ class FloatBall(QWidget):
             # 添加到菜单
             menu.addAction(full_screenshot_action)
             menu.addAction(area_screenshot_action)
+            menu.addAction(auto_save_action)
             menu.addSeparator()
             menu.addAction(exit_action)
             
@@ -332,4 +341,343 @@ class FloatBall(QWidget):
             event.accept()
         except Exception as e:
             logger.error(f"处理窗口关闭事件时出错: {str(e)}")
+            logger.error(traceback.format_exc())
+    
+    def show_success_tip(self, message="截图已保存"):
+        """
+        显示成功提示，几秒后自动消失
+        
+        参数:
+            message: 要显示的提示信息
+        """
+        try:
+            # 简化消息格式 - 如果是"第 x 张截图已保存"格式的消息，转换为"savex"格式
+            if "截图已保存" in message:
+                try:
+                    # 提取截图序号
+                    import re
+                    match = re.search(r'第\s*(\d+)\s*张', message)
+                    if match:
+                        num = match.group(1)
+                        message = f"save{num}"
+                    else:
+                        message = "saved"
+                except Exception as e:
+                    logger.error(f"简化消息格式时出错: {str(e)}")
+                    message = "saved"  # 默认简化消息
+            
+            logger.debug(f"开始显示悬浮球成功提示: '{message}'")
+            logger.debug(f"当前悬浮球状态: 可见={self.isVisible()}, 大小={self.size().width()}x{self.size().height()}")
+            
+            # 检查组件是否存在
+            if not hasattr(self, 'icon_label'):
+                logger.error("悬浮球图标标签属性不存在，无法显示提示")
+                return
+                
+            if self.icon_label is None:
+                logger.error("悬浮球图标标签为None，无法显示提示")
+                return
+                
+            logger.debug(f"icon_label状态: 可见={self.icon_label.isVisible()}, 大小={self.icon_label.size().width()}x{self.icon_label.size().height()}")
+            
+            # 先保存原始状态，确保在恢复时有正确的值
+            try:
+                logger.debug("开始保存原始样式和图标")
+                
+                # 保存原始样式表
+                self.original_style = self.icon_label.styleSheet()
+                logger.debug(f"已保存原始样式表: {self.original_style[:50]}...")  # 只记录前50个字符
+                
+                # 保存原始图像
+                original_pixmap = self.icon_label.pixmap()
+                if original_pixmap is None:
+                    logger.warning("原始图像为None")
+                    self.original_pixmap = None
+                elif original_pixmap.isNull():
+                    logger.warning("原始图像为空")
+                    self.original_pixmap = None
+                else:
+                    # 创建深拷贝
+                    self.original_pixmap = QPixmap(original_pixmap)
+                    logger.debug(f"已保存原始图像，尺寸: {self.original_pixmap.width()}x{self.original_pixmap.height()}")
+                
+                # 保存原始大小
+                self.original_size = QSize(self.size())
+                logger.debug(f"已保存原始大小: {self.original_size.width()}x{self.original_size.height()}")
+            except Exception as e:
+                logger.error(f"保存原始样式时出错: {str(e)}")
+                logger.error(traceback.format_exc())
+                return
+            
+            # 设置成功提示样式
+            try:
+                logger.debug("开始设置成功提示样式")
+                self.icon_label.setStyleSheet("""
+                    background-color: rgba(46, 125, 50, 200);
+                    color: white;
+                    border-radius: 15px;
+                    padding: 5px;
+                    font-weight: bold;
+                    font-size: 12px;
+                """)
+                logger.debug("成功提示样式设置完成")
+            except Exception as e:
+                logger.error(f"设置提示样式时出错: {str(e)}")
+                logger.error(traceback.format_exc())
+                # 继续执行，不要因为样式问题而中断
+            
+            # 创建一个带有文字的新图像 - 使用更小的尺寸
+            try:
+                logger.debug("开始创建提示图像")
+                # 减小图像尺寸，以适应更短的文本
+                success_pixmap = QPixmap(100, 40)  # 将200x70减小到100x40
+                if success_pixmap.isNull():
+                    logger.error("创建提示图像失败，QPixmap为空")
+                    return
+                    
+                logger.debug("填充透明背景")
+                success_pixmap.fill(Qt.transparent)
+                
+                logger.debug("开始绘制提示图像")
+                painter = QPainter(success_pixmap)
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.setBrush(QColor(46, 125, 50, 220))  # 半透明绿色背景，稍微不那么透明
+                painter.setPen(Qt.NoPen)
+                painter.drawRoundedRect(success_pixmap.rect(), 15, 15)  # 减小圆角半径
+                
+                # 绘制文字 - 使用更小的字体
+                logger.debug(f"绘制文字: '{message}'")
+                painter.setPen(Qt.white)
+                font = self.font()
+                font.setPointSize(12)  # 减小字体大小
+                font.setBold(True)     # 保持粗体
+                painter.setFont(font)
+                painter.drawText(success_pixmap.rect(), Qt.AlignCenter, message)  # 移除✓符号，直接显示简化的消息
+                painter.end()
+                logger.debug("提示图像创建完成")
+            except Exception as e:
+                logger.error(f"创建提示图像时出错: {str(e)}")
+                logger.error(traceback.format_exc())
+                return
+            
+            # 临时调整窗口大小以适应提示
+            try:
+                logger.debug(f"调整窗口大小为: {success_pixmap.width()}x{success_pixmap.height()}")
+                
+                # 先调整icon_label大小
+                if hasattr(self, 'icon_label') and self.icon_label:
+                    self.icon_label.setMinimumSize(success_pixmap.width(), success_pixmap.height())
+                    self.icon_label.setMaximumSize(success_pixmap.width(), success_pixmap.height())
+                    logger.debug(f"已调整icon_label大小为: {success_pixmap.width()}x{success_pixmap.height()}")
+                
+                # 然后调整窗口大小
+                self.safe_resize(success_pixmap.width(), success_pixmap.height())
+                logger.debug("窗口大小调整完成")
+            except Exception as e:
+                logger.error(f"调整窗口大小时出错: {str(e)}")
+                logger.error(traceback.format_exc())
+                # 继续执行，不要因为大小调整问题而中断
+            
+            # 设置新图像
+            try:
+                logger.debug("设置新图像到icon_label")
+                self.icon_label.setPixmap(success_pixmap)
+                self.icon_label.setScaledContents(True)  # 确保图像缩放以填充标签
+                logger.debug("新图像设置完成")
+            except Exception as e:
+                logger.error(f"设置提示图像时出错: {str(e)}")
+                logger.error(traceback.format_exc())
+                # 尝试恢复原始状态
+                self.restore_default_style()
+                return
+            
+            # 创建一个定时器，几秒后恢复原样
+            try:
+                logger.debug("创建恢复定时器，2000毫秒后执行")
+                
+                # 创建一个新的定时器对象，并保存为实例变量，避免被垃圾回收
+                if hasattr(self, 'restore_timer') and self.restore_timer:
+                    # 如果已经有定时器，先停止它
+                    self.restore_timer.stop()
+                
+                self.restore_timer = QTimer(self)  # 使用self作为父对象，确保不会被垃圾回收
+                self.restore_timer.setSingleShot(True)
+                self.restore_timer.timeout.connect(self.restore_default_style)
+                self.restore_timer.start(2000)
+                
+                logger.debug("恢复定时器创建完成")
+            except Exception as e:
+                logger.error(f"创建恢复定时器时出错: {str(e)}")
+                logger.error(traceback.format_exc())
+                # 立即尝试恢复原始状态
+                self.restore_default_style()
+            
+            logger.debug("成功提示显示完成")
+            
+        except Exception as e:
+            logger.error(f"显示成功提示时出错: {str(e)}")
+            logger.error(traceback.format_exc())
+            # 尝试恢复正常状态
+            self.restore_default_style()
+    
+    def restore_default_style(self):
+        """
+        恢复默认样式，由定时器调用
+        """
+        try:
+            logger.debug("定时器触发，恢复默认样式")
+            
+            # 检查窗口是否仍然有效
+            if not self or not self.isVisible() or self.isHidden():
+                logger.warning("窗口已不可见或已销毁，跳过恢复样式")
+                return
+                
+            # 使用最简单的方式恢复 - 先恢复大小，再清除样式
+            try:
+                logger.debug("使用简单方式恢复样式")
+                
+                # 先恢复大小
+                self.safe_resize(50, 50)
+                logger.debug("恢复大小为50x50")
+                
+                # 调整icon_label大小
+                if hasattr(self, 'icon_label') and self.icon_label:
+                    self.icon_label.setScaledContents(False)  # 关闭缩放模式
+                    self.icon_label.setMinimumSize(1, 1)  # 重置最小大小
+                    self.icon_label.setMaximumSize(16777215, 16777215)  # 重置最大大小
+                    logger.debug("已重置icon_label大小限制")
+                
+                # 清除样式表
+                if hasattr(self, 'icon_label') and self.icon_label:
+                    self.icon_label.setStyleSheet("")
+                    logger.debug("清除样式表成功")
+                
+                # 使用初始化时保存的默认图标
+                if hasattr(self, 'default_icon') and self.default_icon and not self.default_icon.isNull():
+                    if hasattr(self, 'icon_label') and self.icon_label:
+                        self.icon_label.setPixmap(self.default_icon)
+                        logger.debug("使用默认图标恢复成功")
+                else:
+                    # 如果没有默认图标，尝试创建一个简单的圆形图标
+                    try:
+                        # 获取系统图标
+                        if self.parent_window:
+                            pixmap = self.parent_window.style().standardIcon(
+                                self.parent_window.style().SP_ComputerIcon
+                            ).pixmap(32, 32)
+                            
+                            if pixmap and not pixmap.isNull():
+                                # 创建一个简单的圆形背景
+                                rounded_pixmap = QPixmap(32, 32)
+                                rounded_pixmap.fill(Qt.transparent)
+                                
+                                painter = QPainter(rounded_pixmap)
+                                if painter.isActive():
+                                    painter.setRenderHint(QPainter.Antialiasing)
+                                    painter.setBrush(QColor(76, 175, 80, 200))  # 半透明绿色背景
+                                    painter.setPen(Qt.NoPen)
+                                    painter.drawEllipse(rounded_pixmap.rect())
+                                    
+                                    # 在中心绘制图标
+                                    painter.drawPixmap(0, 0, pixmap)
+                                    painter.end()
+                                    
+                                    # 设置图标
+                                    if hasattr(self, 'icon_label') and self.icon_label:
+                                        self.icon_label.setPixmap(rounded_pixmap)
+                                        logger.debug("设置简单圆形图标成功")
+                    except Exception as e:
+                        logger.error(f"创建简单圆形图标时出错: {str(e)}")
+                        logger.error(traceback.format_exc())
+                        
+                        # 如果创建图标失败，尝试使用保存的原始图像
+                        if hasattr(self, 'original_pixmap') and self.original_pixmap and not self.original_pixmap.isNull():
+                            if hasattr(self, 'icon_label') and self.icon_label:
+                                self.icon_label.setPixmap(self.original_pixmap)
+                                logger.debug("使用保存的原始图像恢复")
+            
+            except Exception as e:
+                logger.error(f"使用简单方式恢复样式时出错: {str(e)}")
+                logger.error(traceback.format_exc())
+                
+                # 如果简单恢复失败，尝试使用保存的原始状态
+                try:
+                    logger.debug("尝试使用保存的原始状态恢复")
+                    
+                    # 恢复样式
+                    if hasattr(self, 'original_style') and hasattr(self, 'icon_label') and self.icon_label:
+                        self.icon_label.setStyleSheet(self.original_style)
+                        logger.debug("恢复原始样式表成功")
+                    
+                    # 恢复图像
+                    if hasattr(self, 'original_pixmap') and self.original_pixmap and not self.original_pixmap.isNull():
+                        if hasattr(self, 'icon_label') and self.icon_label:
+                            self.icon_label.setPixmap(self.original_pixmap)
+                            logger.debug("恢复原始图像成功")
+                    
+                    # 恢复大小
+                    if hasattr(self, 'original_size'):
+                        self.safe_resize(self.original_size.width(), self.original_size.height())
+                        logger.debug(f"恢复原始大小成功: {self.original_size.width()}x{self.original_size.height()}")
+                except Exception as ex:
+                    logger.error(f"使用保存的原始状态恢复时出错: {str(ex)}")
+                    logger.error(traceback.format_exc())
+            
+            # 清理引用
+            if hasattr(self, 'restore_timer'):
+                self.restore_timer = None
+            if hasattr(self, 'original_style'):
+                self.original_style = None
+            if hasattr(self, 'original_pixmap'):
+                self.original_pixmap = None
+            if hasattr(self, 'original_size'):
+                self.original_size = None
+                
+            logger.debug("恢复默认样式完成")
+            
+        except Exception as e:
+            logger.error(f"恢复默认样式时出错: {str(e)}")
+            logger.error(traceback.format_exc())
+    
+    def safe_resize(self, width, height):
+        """
+        安全地调整窗口大小
+        
+        参数:
+            width: 宽度
+            height: 高度
+        """
+        try:
+            # 检查窗口是否仍然有效
+            if not self or not self.isVisible() or self.isHidden():
+                logger.warning("窗口已不可见或已销毁，跳过调整大小")
+                return
+                
+            logger.debug(f"尝试调整窗口大小为: {width}x{height}")
+            
+            # 先取消固定大小约束
+            self.setMinimumSize(1, 1)
+            self.setMaximumSize(16777215, 16777215)  # Qt的最大值
+            
+            # 再使用resize
+            self.resize(width, height)
+            
+            # 等待处理事件，让resize生效
+            QApplication.processEvents()
+            
+            # 然后使用setFixedSize
+            self.setFixedSize(width, height)
+            
+            # 再次处理事件
+            QApplication.processEvents()
+            
+            # 记录实际调整后的大小
+            logger.debug(f"调整后的实际大小: {self.width()}x{self.height()}")
+            
+            # 如果调整失败，记录警告
+            if self.width() != width or self.height() != height:
+                logger.warning(f"大小调整不匹配: 当前={self.width()}x{self.height()}, 目标={width}x{height}")
+                
+        except Exception as e:
+            logger.error(f"安全调整大小时出错: {str(e)}")
             logger.error(traceback.format_exc()) 

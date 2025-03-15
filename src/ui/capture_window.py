@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QWidget
 from PyQt5.QtCore import Qt, QPoint, QRect, QRectF
 from PyQt5.QtGui import QPainter, QPen, QColor, QPainterPath
 from src.utils.logger import logger
+from PyQt5.QtWidgets import QApplication
 
 class CaptureWindow(QWidget):
     """
@@ -14,18 +15,21 @@ class CaptureWindow(QWidget):
     用于实现区域截图功能，允许用户通过鼠标选择截图区域
     """
     
-    def __init__(self, screenshot, parent=None):
+    def __init__(self, parent=None):
         """
         初始化截图窗口
         
         参数:
-            screenshot: QPixmap对象，全屏截图
             parent: 父窗口，通常是主窗口
         """
         super().__init__()
         logger.debug("初始化截图窗口")
         self.parent_window = parent
-        self.screenshot = screenshot
+        
+        # 获取全屏截图
+        self.screenshot = QApplication.primaryScreen().grabWindow(0)
+        logger.debug(f"获取全屏截图，尺寸: {self.screenshot.width()}x{self.screenshot.height()}")
+        
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setStyleSheet("background-color:transparent;")
         self.setCursor(Qt.CrossCursor)
@@ -33,6 +37,7 @@ class CaptureWindow(QWidget):
         self.begin = QPoint()
         self.end = QPoint()
         self.is_drawing = False
+        self.auto_save_mode = False  # 是否自动保存模式
         self.float_ball_visible = False  # 记录悬浮球是否应该可见
     
     def paintEvent(self, event):
@@ -182,4 +187,14 @@ class CaptureWindow(QWidget):
         
         # 处理截图
         logger.debug("将截图传递给主窗口处理")
-        self.parent_window.process_screenshot_with_dialog(cropped_pixmap) 
+        if self.auto_save_mode:
+            # 自动保存模式
+            logger.debug("使用自动保存模式处理截图")
+            # 先恢复窗口显示状态，确保悬浮球可见（如果在工作模式下）
+            self.restore_parent_window()
+            # 然后处理截图
+            self.parent_window.screenshot_manager.process_screenshot_auto_save(cropped_pixmap)
+        else:
+            # 普通模式，显示对话框
+            logger.debug("使用普通模式处理截图（显示对话框）")
+            self.parent_window.process_screenshot_with_dialog(cropped_pixmap) 
