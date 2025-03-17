@@ -169,24 +169,28 @@ class MainWindow(QMainWindow):
         """
         logger.info("设置应用程序快捷键")
         try:
-            # 设置快捷键 - F12全屏截图，Ctrl+F12区域截图
-            self.fullscreen_shortcut = QShortcut(QKeySequence("F12"), self)
-            self.fullscreen_shortcut.activated.connect(self.take_fullscreen_screenshot)
-            logger.debug("已设置F12全屏截图快捷键")
+            # 不再注册F12全屏截图快捷键，因为已经通过HotkeyManager注册了全局热键
+            # 这样可以避免F12热键被重复触发
+            # self.fullscreen_shortcut = QShortcut(QKeySequence("F12"), self)
+            # self.fullscreen_shortcut.activated.connect(self.take_fullscreen_screenshot)
+            # logger.debug("已设置F12全屏截图快捷键")
             
-            self.area_shortcut = QShortcut(QKeySequence("Ctrl+F12"), self)
-            self.area_shortcut.activated.connect(self.start_capture)
-            logger.debug("已设置Ctrl+F12区域截图快捷键")
+            # 同样，不再注册Ctrl+F12区域截图快捷键
+            # self.area_shortcut = QShortcut(QKeySequence("Ctrl+F12"), self)
+            # self.area_shortcut.activated.connect(self.start_capture)
+            # logger.debug("已设置Ctrl+F12区域截图快捷键")
             
-            # F11快捷键 - 自动保存截图
-            self.auto_save_shortcut = QShortcut(QKeySequence("F11"), self)
-            self.auto_save_shortcut.activated.connect(self.take_auto_save_screenshot)
-            logger.debug("已设置F11自动保存截图快捷键")
+            # 不再注册F11快捷键
+            # self.auto_save_shortcut = QShortcut(QKeySequence("F11"), self)
+            # self.auto_save_shortcut.activated.connect(self.take_auto_save_screenshot)
+            # logger.debug("已设置F11自动保存截图快捷键")
             
-            # ESC键退出置顶/工作模式
+            # 保留ESC键退出置顶/工作模式
             self.esc_shortcut = QShortcut(QKeySequence("Escape"), self)
             self.esc_shortcut.activated.connect(self.exit_special_modes)
             logger.debug("已设置ESC退出快捷键")
+            
+            logger.info("已移除重复的热键注册，只保留ESC快捷键")
         except Exception as e:
             logger.error(f"设置快捷键时出错: {str(e)}")
             logger.error(traceback.format_exc())
