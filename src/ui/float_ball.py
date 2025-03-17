@@ -649,35 +649,88 @@ class FloatBall(QWidget):
         """
         try:
             # 检查窗口是否仍然有效
-            if not self or not self.isVisible() or self.isHidden():
-                logger.warning("窗口已不可见或已销毁，跳过调整大小")
+            if not self or not self.isVisible():
+                logger.warning("窗口已不可见，跳过调整大小")
                 return
                 
             logger.debug(f"尝试调整窗口大小为: {width}x{height}")
+            logger.debug(f"当前窗口状态: 可见={self.isVisible()}, 大小={self.size().width()}x{self.size().height()}, 标志={self.windowFlags()}")
+            
+            # 保存当前窗口状态
+            current_flags = self.windowFlags()
+            current_geometry = self.geometry()
+            logger.debug(f"保存当前窗口状态 - 位置: ({current_geometry.x()}, {current_geometry.y()}), 大小: {current_geometry.width()}x{current_geometry.height()}")
+            
+            # 临时移除 Qt.Tool 标志，防止调整大小时窗口关闭
+            new_flags = current_flags & ~Qt.Tool
+            if new_flags != current_flags:
+                logger.debug(f"移除Qt.Tool标志: {new_flags}")
+                self.setWindowFlags(new_flags)
+                
+                # 确保窗口仍然可见
+                if not self.isVisible():
+                    self.show()
+                    logger.debug("重新显示窗口")
             
             # 先取消固定大小约束
             self.setMinimumSize(1, 1)
             self.setMaximumSize(16777215, 16777215)  # Qt的最大值
+            logger.debug("已重置窗口大小约束")
             
-            # 再使用resize
+            # 使用resize调整大小
             self.resize(width, height)
+            logger.debug(f"resize后的窗口大小: {self.size().width()}x{self.size().height()}")
             
             # 等待处理事件，让resize生效
             QApplication.processEvents()
+            logger.debug("已处理事件队列")
             
-            # 然后使用setFixedSize
+            # 使用setFixedSize固定大小
             self.setFixedSize(width, height)
+            logger.debug(f"setFixedSize后的窗口大小: {self.size().width()}x{self.size().height()}")
+            
+            # 恢复原始窗口标志
+            if new_flags != current_flags:
+                logger.debug(f"恢复原始窗口标志: {current_flags}")
+                self.setWindowFlags(current_flags)
+                
+                # 恢复窗口位置
+                self.setGeometry(current_geometry.x(), current_geometry.y(), width, height)
+                logger.debug(f"恢复窗口位置: ({current_geometry.x()}, {current_geometry.y()})")
+                
+                # 重新显示窗口
+                self.show()
+                logger.debug("已重新显示窗口")
             
             # 再次处理事件
             QApplication.processEvents()
+            logger.debug("已再次处理事件队列")
             
             # 记录实际调整后的大小
-            logger.debug(f"调整后的实际大小: {self.width()}x{self.height()}")
+            final_size = self.size()
+            logger.debug(f"调整后的最终大小: {final_size.width()}x{final_size.height()}")
             
             # 如果调整失败，记录警告
-            if self.width() != width or self.height() != height:
-                logger.warning(f"大小调整不匹配: 当前={self.width()}x{self.height()}, 目标={width}x{height}")
+            if final_size.width() != width or final_size.height() != height:
+                logger.warning(f"大小调整不匹配: 当前={final_size.width()}x{final_size.height()}, 目标={width}x{height}")
                 
+            # 确保窗口仍然在最顶层
+            self.ensure_topmost()
+            logger.debug("已确保窗口在最顶层")
+            
         except Exception as e:
             logger.error(f"安全调整大小时出错: {str(e)}")
-            logger.error(traceback.format_exc()) 
+            logger.error(traceback.format_exc())
+            
+            # 尝试恢复窗口状态
+            try:
+                if 'current_flags' in locals():
+                    self.setWindowFlags(current_flags)
+                if 'current_geometry' in locals():
+                    self.setGeometry(current_geometry)
+                self.show()
+                self.ensure_topmost()
+                logger.debug("已尝试恢复窗口状态")
+            except Exception as restore_error:
+                logger.error(f"恢复窗口状态时出错: {str(restore_error)}")
+                logger.error(traceback.format_exc()) 

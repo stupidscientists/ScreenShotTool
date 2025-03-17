@@ -54,7 +54,7 @@ class AboutDialog(QDialog):
             title_label.setAlignment(Qt.AlignCenter)
             
             # 版本
-            version_label = QLabel('版本 1.0')
+            version_label = QLabel('版本 1.0.4')
             version_label.setStyleSheet("font-size: 14px; color: #555;")
             version_label.setAlignment(Qt.AlignCenter)
             

@@ -9,8 +9,10 @@ import traceback
 import datetime
 from docx import Document
 from docx.shared import Inches
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 from src.utils.logger import logger
+import shutil
 
 class DocumentManager:
     """
@@ -30,6 +32,8 @@ class DocumentManager:
         self.word_path = None
         self.original_paragraphs = []  # 保存打开文档时的原始段落数量
         self.original_rels_count = 0   # 保存打开文档时的原始关系数量（用于图片计数）
+        self.current_image_path = None  # 当前要添加的图片路径
+        self.current_text_description = None  # 当前要添加的文本说明
         logger.debug("初始化文档管理器")
     
     def create_document(self):
@@ -225,309 +229,273 @@ class DocumentManager:
     
     def save_document(self):
         """
-        保存当前Word文档
-        
-        返回:
-            bool: 保存成功返回True，否则返回False
+        保存文档
+        如果文档已被外部修改，会提示用户选择合并或覆盖
         """
-        if not self.word_doc or not self.word_path:
-            logger.warning("尝试保存文档但未创建或打开文档")
-            QMessageBox.warning(self.parent, '警告', '请先创建或打开Word文档')
-            return False
-        
-        # 检查文件路径是否有效
         try:
-            # 检查目录是否存在
-            dir_path = os.path.dirname(self.word_path)
-            if not os.path.exists(dir_path):
-                logger.error(f"保存目录不存在: {dir_path}")
-                QMessageBox.critical(self.parent, '错误', f'保存目录不存在: {dir_path}')
-                return False
+            logger.debug(f"尝试保存文档: {self.word_path}")
+            
+            # 检查文件是否存在且已被修改
+            if os.path.exists(self.word_path):
+                current_modified_time = os.path.getmtime(self.word_path)
+                logger.debug(f"当前文件修改时间: {current_modified_time}, 上次记录的修改时间: {self.last_modified_time}")
                 
-            # 检查目录是否可写
-            if not os.access(dir_path, os.W_OK):
-                logger.error(f"保存目录无法写入: {dir_path}")
-                QMessageBox.critical(self.parent, '错误', f'保存目录无法写入: {dir_path}')
-                return False
-                
-            # 如果文件已存在，检查是否可写
-            if os.path.exists(self.word_path) and not os.access(self.word_path, os.W_OK):
-                logger.error(f"文件无法写入: {self.word_path}")
-                QMessageBox.critical(self.parent, '错误', f'文件无法写入: {self.word_path}')
-                return False
-                
-            # 检查文件是否被外部修改（如果文件存在）
-            if os.path.exists(self.word_path) and hasattr(self, 'last_modified_time'):
-                current_mtime = os.path.getmtime(self.word_path)
-                
-                if current_mtime != self.last_modified_time:
+                # 检查文件是否被外部修改
+                if current_modified_time != self.last_modified_time:
                     logger.warning(f"检测到文件已被外部修改: {self.word_path}")
                     
-                    # 询问用户如何处理
-                    msg_box = QMessageBox(self.parent)
-                    msg_box.setWindowTitle('文件已修改')
-                    msg_box.setText('检测到文档已在外部被修改。如何处理?')
-                    msg_box.setInformativeText('【合并】: 尝试将当前内容合并到修改后的文档\n【覆盖】: 使用当前内容覆盖外部修改\n【取消】: 取消保存操作')
+                    # 创建合并确认对话框
+                    merge_msg_box = QMessageBox(self.parent)
+                    merge_msg_box.setWindowTitle('文件已修改')
+                    merge_msg_box.setText('文档已被外部修改，是否合并更改？')
+                    merge_msg_box.setInformativeText('选择"合并"将保留外部修改并添加新内容\n选择"覆盖"将丢失外部修改')
                     
                     # 添加自定义按钮
-                    merge_button = msg_box.addButton('合并', QMessageBox.YesRole)
-                    overwrite_button = msg_box.addButton('覆盖', QMessageBox.AcceptRole)
-                    cancel_button = msg_box.addButton('取消', QMessageBox.RejectRole)
+                    merge_button = merge_msg_box.addButton('合并', QMessageBox.YesRole)
+                    overwrite_button = merge_msg_box.addButton('覆盖', QMessageBox.DestructiveRole)
+                    cancel_button = merge_msg_box.addButton('取消', QMessageBox.RejectRole)
                     
                     # 设置默认按钮
-                    msg_box.setDefaultButton(merge_button)
+                    merge_msg_box.setDefaultButton(merge_button)
                     
                     # 执行对话框
-                    msg_box.exec_()
+                    logger.debug("显示合并确认对话框")
+                    merge_msg_box.exec_()
                     
                     # 获取用户点击的按钮
-                    clicked_button = msg_box.clickedButton()
+                    clicked_button = merge_msg_box.clickedButton()
+                    logger.debug(f"用户点击的按钮: {clicked_button.text()}")
                     
-                    if clicked_button == cancel_button:
-                        logger.info("用户取消了保存操作")
-                        return False
-                    
-                    elif clicked_button == merge_button:  # 合并
+                    # 处理用户选择
+                    if clicked_button == merge_button:
+                        # 用户选择合并
                         logger.info("用户选择合并文档")
-                        
                         try:
-                            # 尝试合并文档
-                            # 1. 先读取当前文档内容
-                            current_doc = self.word_doc
+                            # 打开当前文档
+                            current_doc = Document(self.word_path)
+                            logger.debug("成功打开当前文档")
                             
-                            # 2. 重新加载磁盘上的文档
-                            self.word_doc = Document(self.word_path)
+                            # 比较段落数量
+                            current_paragraphs_count = len(current_doc.paragraphs)
+                            original_paragraphs_count = len(self.word_doc.paragraphs)
+                            logger.debug(f"原始段落数: {original_paragraphs_count}, 当前段落数: {current_paragraphs_count}")
                             
-                            # 3. 确定新增内容，只合并自上次打开后添加的内容
-                            # 添加一个分隔行，表明下面是新增内容
-                            # separator = self.word_doc.add_paragraph("=" * 30)
-                            # separator.add_run(" 以下是新增内容 ").bold = True
-                            # separator.add_run("=" * 30)
-                            
-                            # 复制新增的段落文本（跳过原始内容）
-                            original_count = len(self.original_paragraphs)
-                            current_count = len(list(current_doc.paragraphs))
-                            
-                            logger.debug(f"原始段落数: {original_count}, 当前段落数: {current_count}")
-                            
-                            if current_count > original_count:
-                                # 只复制新增的段落
-                                logger.info(f"将复制 {current_count - original_count} 个新增段落")
-                                added_paragraphs = list(current_doc.paragraphs)[original_count:]
+                            # 检查是否有内容变化（增加或删除）
+                            if current_paragraphs_count != original_paragraphs_count:
+                                logger.info(f"检测到内容变化: 原始={original_paragraphs_count}, 当前={current_paragraphs_count}")
                                 
-                                for paragraph in added_paragraphs:
-                                    if paragraph.text:
-                                        p = self.word_doc.add_paragraph()
-                                        for run in paragraph.runs:
-                                            # 复制文本及其格式
-                                            new_run = p.add_run(run.text)
-                                            new_run.bold = run.bold
-                                            new_run.italic = run.italic
-                                            new_run.underline = run.underline
-                                            # 可以添加更多格式复制
-                            else:
-                                logger.info("没有检测到新增段落，将复制最后一个段落作为新增内容")
-                                # 如果没有新增段落，复制最后一个段落作为提示
-                                if current_count > 0:
-                                    last_para = current_doc.paragraphs[-1]
-                                    p = self.word_doc.add_paragraph()
-                                    for run in last_para.runs:
-                                        new_run = p.add_run(run.text)
-                                        new_run.bold = run.bold
-                                        new_run.italic = run.italic
-                                        new_run.underline = run.underline
-                            
-                            # 使用更健壮的方式复制新增图片
-                            try:
-                                # 创建临时目录用于存储图片
-                                app_dir = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-                                temp_dir = os.path.join(app_dir, 'temp_merge_images')
-                                os.makedirs(temp_dir, exist_ok=True)
+                                # 如果当前文档段落数更多，说明有新增内容
+                                if current_paragraphs_count > original_paragraphs_count:
+                                    new_paragraphs_count = current_paragraphs_count - original_paragraphs_count
+                                    logger.info(f"检测到 {new_paragraphs_count} 个新增段落")
+                                    
+                                    # 复制新增段落
+                                    for i in range(original_paragraphs_count, current_paragraphs_count):
+                                        para = current_doc.paragraphs[i]
+                                        new_para = self.word_doc.add_paragraph()
+                                        new_para.text = para.text
+                                        logger.debug(f"复制段落 {i}: {para.text[:50]}...")
+                                    
+                                else:
+                                    # 如果当前文档段落数更少，说明有删除的内容
+                                    deleted_paragraphs_count = original_paragraphs_count - current_paragraphs_count
+                                    logger.info(f"检测到 {deleted_paragraphs_count} 个段落被删除")
+                                    
+                                    # 在这种情况下，我们应该使用当前文档的内容作为基础
+                                    logger.info("使用当前文档的内容作为基础")
+                                    
+                                    # 保存当前要添加的图片（如果有）
+                                    current_image_to_add = None
+                                    current_text_description = None
+                                    if hasattr(self, 'current_image_path') and self.current_image_path:
+                                        logger.debug(f"保存当前要添加的图片: {self.current_image_path}")
+                                        current_image_to_add = self.current_image_path
+                                        # 如果有文本说明，也保存它
+                                        if hasattr(self, 'current_text_description') and self.current_text_description:
+                                            current_text_description = self.current_text_description
+                                            logger.debug(f"保存当前文本说明: {current_text_description}")
+                                    
+                                    # 使用当前文档替换原始文档
+                                    self.word_doc = current_doc
+                                    
+                                    # 如果有图片要添加，现在添加它
+                                    manually_added_image = False
+                                    if current_image_to_add:
+                                        # 如果有文本说明，先添加它
+                                        if current_text_description:
+                                            logger.debug(f"合并后添加文本说明: {current_text_description}")
+                                            self.word_doc.add_paragraph(current_text_description)
+                                        
+                                        logger.debug(f"合并后添加当前图片: {current_image_to_add}")
+                                        self.word_doc.add_picture(current_image_to_add, width=Inches(6))
+                                        self.word_doc.add_paragraph()  # 添加空行
+                                        manually_added_image = True
+                                        logger.debug("已手动添加图片，将跳过自动检测新增图片关系")
                                 
-                                # 复制新增图片（跳过原始图片）
-                                image_count = 0
-                                temp_files = []  # 记录创建的临时文件
-                                
-                                # 计算当前文档中的图片关系数
+                                # 检查关系数量（用于判断是否有新增图片）
                                 current_rels_count = len(current_doc.part.rels)
+                                current_rel_ids = set(current_doc.part.rels.keys())
                                 logger.debug(f"原始关系数: {self.original_rels_count}, 当前关系数: {current_rels_count}")
                                 
-                                # 只复制新增的图片关系
-                                if current_rels_count > self.original_rels_count:
-                                    # 尝试找出新增的图片关系
-                                    all_rels = list(current_doc.part.rels.values())
-                                    new_rels = all_rels[self.original_rels_count:]
-                                    
-                                    logger.info(f"检测到 {len(new_rels)} 个新增关系")
-                                    
-                                    for rel in new_rels:
+                                # 检查是否有新增的图片关系，但如果已手动添加图片则跳过
+                                if not manually_added_image:
+                                    if hasattr(self, 'original_rel_ids'):
+                                        new_rel_ids = current_rel_ids - self.original_rel_ids
+                                    else:
+                                        new_rel_ids = current_rel_ids
+                                        
+                                    if new_rel_ids:
+                                        logger.info(f"检测到 {len(new_rel_ids)} 个新增关系")
+                                        
+                                        # 使用更健壮的方式复制新增图片
                                         try:
-                                            # 检查是否是图片关系
-                                            if hasattr(rel, 'target_ref') and "image" in rel.target_ref.lower():
-                                                image_count += 1
-                                                # 获取图片二进制数据
-                                                image_part = rel._target
-                                                if hasattr(image_part, 'blob'):
-                                                    # 保存图片到临时文件
-                                                    img_ext = os.path.splitext(rel.target_ref)[1]
-                                                    if not img_ext:
-                                                        img_ext = ".png"  # 默认扩展名
-                                                    
-                                                    temp_img_path = os.path.join(
-                                                        temp_dir, f'merge_image_{image_count}{img_ext}'
-                                                    )
-                                                    
-                                                    with open(temp_img_path, 'wb') as f:
-                                                        f.write(image_part.blob)
-                                                    
-                                                    # 将图片添加到文档
-                                                    self.word_doc.add_picture(temp_img_path, width=Inches(6))
-                                                    
-                                                    # 添加到临时文件列表
-                                                    temp_files.append(temp_img_path)
-                                                    
-                                                    logger.debug(f"成功复制图片 {image_count} 到合并文档")
-                                        except Exception as img_error:
-                                            logger.warning(f"处理图片时出错: {str(img_error)}")
-                                            continue
-                                else:
-                                    logger.info("没有检测到新增图片关系")
-                                
-                                if image_count > 0:
-                                    logger.info(f"成功复制 {image_count} 张新增图片到合并文档")
-                                else:
-                                    logger.info("未找到新增图片需要复制")
-                                    
-                                # 清理临时文件
-                                try:
-                                    for temp_file in temp_files:
-                                        if os.path.exists(temp_file):
+                                            # 创建临时目录用于存储图片
+                                            app_dir = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+                                            temp_dir = os.path.join(app_dir, 'temp_merge_images')
+                                            os.makedirs(temp_dir, exist_ok=True)
+                                            logger.debug(f"创建临时目录用于存储合并图片: {temp_dir}")
+                                            
+                                            # 复制新增图片
+                                            image_count = 0
+                                            temp_files = []  # 记录创建的临时文件
+                                            
+                                            for rel_id in new_rel_ids:
+                                                try:
+                                                    rel = current_doc.part.rels[rel_id]
+                                                    if rel.reltype == RT.IMAGE:
+                                                        logger.debug(f"处理新增图片关系: {rel_id}")
+                                                        image_count += 1
+                                                        # 获取图片二进制数据
+                                                        image_part = rel._target
+                                                        if hasattr(image_part, 'blob'):
+                                                            # 保存图片到临时文件
+                                                            img_ext = os.path.splitext(rel.target_ref)[1]
+                                                            if not img_ext:
+                                                                img_ext = ".png"  # 默认扩展名
+                                                            
+                                                            temp_img_path = os.path.join(
+                                                                temp_dir, f'merge_image_{image_count}{img_ext}'
+                                                            )
+                                                            logger.debug(f"保存新增图片到临时文件: {temp_img_path}")
+                                                            
+                                                            with open(temp_img_path, 'wb') as f:
+                                                                f.write(image_part.blob)
+                                                            
+                                                            # 将图片添加到文档
+                                                            self.word_doc.add_picture(temp_img_path, width=Inches(6))
+                                                            
+                                                            # 添加到临时文件列表
+                                                            temp_files.append(temp_img_path)
+                                                            
+                                                            logger.debug(f"成功复制图片 {image_count} 到合并文档")
+                                                except Exception as img_error:
+                                                    logger.error(f"处理图片时出错: {str(img_error)}")
+                                                    logger.error(traceback.format_exc())
+                                                    continue
+                                            
+                                            logger.info(f"成功复制 {image_count} 张新增图片到合并文档")
+                                            
+                                            # 清理临时文件
+                                            for temp_file in temp_files:
+                                                try:
+                                                    os.remove(temp_file)
+                                                    logger.debug(f"已删除临时文件: {temp_file}")
+                                                except Exception as e:
+                                                    logger.warning(f"删除临时文件失败: {str(e)}")
+                                            
+                                            # 删除临时目录
                                             try:
-                                                os.remove(temp_file)
-                                                logger.debug(f"已删除临时文件: {temp_file}")
-                                            except Exception:
-                                                logger.warning(f"无法删除临时文件: {temp_file}")
-                                    
-                                    # 尝试删除临时目录（如果为空）
-                                    try:
-                                        os.rmdir(temp_dir)
-                                        logger.debug(f"已删除临时目录: {temp_dir}")
-                                    except Exception:
-                                        logger.debug(f"无法删除临时目录，可能不为空: {temp_dir}")
-                                except Exception as cleanup_error:
-                                    logger.warning(f"清理临时文件时出错: {str(cleanup_error)}")
-                                    # 继续执行，不因清理失败而中止
-                                    
-                            except Exception as img_copy_error:
-                                logger.error(f"复制图片过程中出错: {str(img_copy_error)}")
-                                logger.error(traceback.format_exc())
-                                # 继续执行，不因图片复制失败而中止整个合并过程
+                                                os.rmdir(temp_dir)
+                                                logger.debug(f"已删除临时目录: {temp_dir}")
+                                            except Exception as e:
+                                                logger.warning(f"删除临时目录失败: {str(e)}")
+                                            
+                                        except Exception as img_copy_error:
+                                            logger.error(f"复制图片过程中出错: {str(img_copy_error)}")
+                                            logger.error(traceback.format_exc())
+                            else:
+                                logger.info("文档段落数量相同，无需合并段落")
                             
                             logger.info("文档合并成功")
-                            
                         except Exception as e:
                             logger.error(f"合并文档时出错: {str(e)}")
                             logger.error(traceback.format_exc())
                             
                             # 提示用户合并失败
-                            merge_msg_box = QMessageBox(self.parent)
-                            merge_msg_box.setWindowTitle('合并失败')
-                            merge_msg_box.setText(f'合并文档失败: {str(e)}')
-                            merge_msg_box.setInformativeText('是否仍要覆盖外部修改？')
+                            error_msg_box = QMessageBox(self.parent)
+                            error_msg_box.setWindowTitle('合并失败')
+                            error_msg_box.setText(f'合并文档失败: {str(e)}')
+                            error_msg_box.setInformativeText('是否仍要覆盖外部修改？')
+                            error_msg_box.setDetailedText(traceback.format_exc())
                             
                             # 添加自定义按钮
-                            overwrite_button = merge_msg_box.addButton('覆盖', QMessageBox.YesRole)
-                            cancel_button = merge_msg_box.addButton('取消', QMessageBox.RejectRole)
+                            overwrite_button = error_msg_box.addButton('覆盖', QMessageBox.YesRole)
+                            cancel_button = error_msg_box.addButton('取消', QMessageBox.RejectRole)
                             
                             # 设置默认按钮
-                            merge_msg_box.setDefaultButton(cancel_button)
+                            error_msg_box.setDefaultButton(cancel_button)
                             
                             # 执行对话框
-                            merge_msg_box.exec_()
+                            error_msg_box.exec_()
                             
                             # 获取用户点击的按钮
-                            if merge_msg_box.clickedButton() == cancel_button:
+                            if error_msg_box.clickedButton() == cancel_button:
                                 logger.info("用户取消了保存操作")
                                 return False
                     
-                    # 如果用户选择"覆盖"或合并失败后选择继续，则使用当前内容覆盖
-                    if clicked_button == overwrite_button:
-                        logger.info("用户选择覆盖外部修改")
-                    else:
-                        logger.info("将使用当前内容覆盖文件")
-        except Exception as e:
-            logger.error(f"检查文件路径时出错: {str(e)}")
-            QMessageBox.critical(self.parent, '错误', f'检查文件路径时出错: {str(e)}')
-            return False
-        
-        # 检查文档对象是否有效
-        try:
-            _ = self.word_doc.paragraphs
-        except Exception as e:
-            logger.error(f"文档对象无效: {str(e)}")
-            QMessageBox.critical(self.parent, '错误', f'文档对象无效，无法保存: {str(e)}')
-            return False
-        
-        # 尝试保存文档
-        try:
-            logger.debug(f"尝试保存文档: {self.word_path}")
+                    elif clicked_button == overwrite_button:
+                        # 用户选择覆盖
+                        logger.info("用户选择覆盖文件")
+                    
+                    elif clicked_button == cancel_button:
+                        # 用户选择取消
+                        logger.info("用户取消了保存操作")
+                        return False
             
-            # 创建临时文件名
-            temp_path = self.word_path + ".tmp"
+            # 创建备份文件
+            backup_path = f"{self.word_path}.bak"
+            try:
+                shutil.copy2(self.word_path, backup_path)
+                logger.debug(f"已创建备份文件: {backup_path}")
+            except Exception as e:
+                logger.warning(f"创建备份文件失败: {str(e)}")
             
-            # 先保存到临时文件
-            self.word_doc.save(temp_path)
-            
-            # 如果原文件存在，先备份
-            if os.path.exists(self.word_path):
-                backup_path = self.word_path + ".bak"
-                try:
-                    if os.path.exists(backup_path):
-                        os.remove(backup_path)
-                    os.rename(self.word_path, backup_path)
-                    logger.debug(f"已创建备份文件: {backup_path}")
-                except Exception as e:
-                    logger.warning(f"创建备份文件时出错: {str(e)}")
-            
-            # 将临时文件重命名为目标文件
-            os.rename(temp_path, self.word_path)
-            
-            # 更新最后修改时间记录
-            self.last_modified_time = os.path.getmtime(self.word_path)
-            
-            # 更新原始内容快照
-            self.save_original_content_info()
-            
-            logger.info(f"文档已成功保存: {self.word_path}")
-            return True
+            # 保存文档
+            try:
+                self.word_doc.save(self.word_path)
+                # 更新文档信息
+                self.original_rels_count = len(self.word_doc.part.rels)
+                self.original_rel_ids = set(self.word_doc.part.rels.keys())
+                logger.debug(f"保存原始文档信息：{len(self.word_doc.paragraphs)}段落，{self.original_rels_count}个关系")
+                logger.info(f"文档已成功保存: {self.word_path}")
+                
+                # 更新最后修改时间
+                self.last_modified_time = os.path.getmtime(self.word_path)
+                logger.debug(f"更新文件最后修改时间: {self.last_modified_time}")
+                
+                return True
+            except Exception as e:
+                logger.error(f"保存文档时出错: {str(e)}")
+                logger.error(traceback.format_exc())
+                
+                # 如果保存失败，尝试恢复备份
+                if os.path.exists(backup_path):
+                    try:
+                        shutil.copy2(backup_path, self.word_path)
+                        logger.info("已恢复备份文件")
+                    except Exception as backup_error:
+                        logger.error(f"恢复备份文件失败: {str(backup_error)}")
+                
+                # 显示错误消息
+                if self.parent:
+                    QMessageBox.critical(self.parent, '保存失败', f'保存文档时出错: {str(e)}')
+                return False
             
         except Exception as e:
-            logger.error(f"保存文档时出错: {str(e)}")
+            logger.error(f"保存文档过程中出错: {str(e)}")
             logger.error(traceback.format_exc())
-            
-            # 检查临时文件是否存在，如果存在则删除
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
-            
-            # 显示错误消息
-            QMessageBox.critical(self.parent, '错误', f'保存Word文档时出错: {str(e)}')
-            
-            # 尝试恢复备份
-            backup_path = self.word_path + ".bak"
-            if os.path.exists(backup_path):
-                try:
-                    if os.path.exists(self.word_path):
-                        os.remove(self.word_path)
-                    os.rename(backup_path, self.word_path)
-                    logger.info(f"已从备份恢复文档: {self.word_path}")
-                    QMessageBox.information(self.parent, '恢复', '已从备份恢复文档')
-                except Exception as restore_error:
-                    logger.error(f"恢复备份时出错: {str(restore_error)}")
-                    QMessageBox.warning(self.parent, '警告', f'无法恢复备份: {str(restore_error)}\n备份文件位于: {backup_path}')
-            
+            if self.parent:
+                QMessageBox.critical(self.parent, '错误', f'保存文档过程中出错: {str(e)}')
             return False
     
     def add_screenshot(self, pixmap, text=""):
@@ -605,6 +573,12 @@ class DocumentManager:
                 if not saved:
                     logger.error(f"保存临时图片失败: {temp_img_path}")
                     raise Exception(f"保存临时图片失败: {temp_img_path}")
+                
+                # 保存当前图片路径，用于合并时使用
+                self.current_image_path = temp_img_path
+                self.current_text_description = text
+                logger.debug(f"保存当前图片路径: {self.current_image_path}")
+                
             except Exception as e:
                 logger.error(f"保存临时图片时出错: {str(e)}")
                 raise Exception(f"保存临时图片时出错: {str(e)}")
@@ -628,6 +602,10 @@ class DocumentManager:
                     # 更新最后修改时间记录
                     self.last_modified_time = os.path.getmtime(self.word_path)
                     logger.debug(f"更新文件最后修改时间: {self.last_modified_time}")
+                
+                # 清除当前图片路径
+                self.current_image_path = None
+                self.current_text_description = None
                 
                 return True
             except Exception as e:
