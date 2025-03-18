@@ -119,6 +119,27 @@ ScreenShotTool/
    pyinstaller --onefile --windowed --icon=resources/icon.ico --name=ScreenShotTool --clean --noconfirm --add-data "resources;resources" run.py
    ```
 
+### 使用build.py自动化打包（推荐）
+
+项目提供了一个自动化打包脚本`build.py`，它提供了更完整的打包流程：
+
+1. 运行打包脚本：
+   ```bash
+   python build.py
+   ```
+
+2. 脚本功能：
+   - 自动清理旧的构建文件和缓存
+   - 安装必要的依赖
+   - 设置正确的版本信息
+   - 添加所有必要的隐藏导入
+   - 构建可执行文件
+   - 创建发布包
+
+3. 打包后的文件将位于：
+   - `dist/ScreenshotTool.exe`：可执行文件
+   - `release/`：发布包目录，包含可执行文件和说明文档
+
 ### 打包后的文件
 
 打包完成后，可执行文件将位于`dist`目录中：
@@ -138,7 +159,7 @@ ScreenShotTool/
    A: 请确保已正确创建或打开Word文档，并且Word应用程序已安装并能正常运行。
 
 2. **Q: 全局热键不起作用怎么办？**  
-   A: 可能与其他应用程序的快捷键冲突，尝试关闭其他可能使用相同快捷键的应用程序。
+   A: 可能与其他应用程序的快捷键冲突，尝试关闭其他可能使用相同快捷键的应用程序;另要用管理员模式启动
 
 3. **Q: 程序崩溃了怎么办？**  
    A: 查看日志文件（位于程序目录下的`screenshot_tool.log`）以获取错误信息，并报告给开发者。
